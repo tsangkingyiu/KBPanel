@@ -6,128 +6,68 @@ return [
     |--------------------------------------------------------------------------
     | Docker Socket Path
     |--------------------------------------------------------------------------
-    |
-    | Path to the Docker socket for API communication.
-    |
     */
 
     'socket' => env('DOCKER_SOCKET', 'unix:///var/run/docker.sock'),
 
     /*
     |--------------------------------------------------------------------------
-    | Docker Network
+    | Docker API Version
     |--------------------------------------------------------------------------
-    |
-    | The Docker network used for KBPanel containers.
-    |
     */
 
-    'network' => env('DOCKER_NETWORK', 'kbpanel_net'),
+    'api_version' => env('DOCKER_API_VERSION', '1.43'),
 
     /*
     |--------------------------------------------------------------------------
-    | Container Naming Convention
+    | Docker Compose Binary
     |--------------------------------------------------------------------------
-    |
-    | Pattern for naming Docker containers.
-    |
     */
 
-    'container_prefix' => env('DOCKER_CONTAINER_PREFIX', 'kbp'),
+    'compose_binary' => env('DOCKER_COMPOSE_BINARY', 'docker compose'),
 
     /*
     |--------------------------------------------------------------------------
-    | Default Images
+    | Project Container Settings
     |--------------------------------------------------------------------------
-    |
-    | Default Docker images for different PHP versions and services.
-    |
     */
 
-    'images' => [
-        'php' => [
-            '7.4' => 'php:7.4-fpm-alpine',
-            '8.0' => 'php:8.0-fpm-alpine',
-            '8.1' => 'php:8.1-fpm-alpine',
-            '8.2' => 'php:8.2-fpm-alpine',
-            '8.3' => 'php:8.3-fpm-alpine',
-        ],
-        'nginx' => 'nginx:alpine',
-        'mysql' => 'mysql:8.0',
-        'redis' => 'redis:7-alpine',
-        'wordpress' => 'wordpress:latest',
+    'project' => [
+        'name_prefix' => 'kbpanel_project_',
+        'network' => 'kbpanel_net',
+        'restart_policy' => 'unless-stopped',
     ],
 
     /*
     |--------------------------------------------------------------------------
-    | Resource Limits
+    | Resource Limits (Per Container)
     |--------------------------------------------------------------------------
-    |
-    | Default resource constraints for containers.
-    |
     */
 
     'limits' => [
-        'memory' => env('DOCKER_MEMORY_LIMIT', '512m'),
-        'cpu_quota' => env('DOCKER_CPU_QUOTA', 50000), // 0.5 CPU
-        'cpu_period' => 100000,
+        'memory' => '512m',
+        'memory_swap' => '1g',
+        'cpus' => '1.0',
     ],
 
     /*
     |--------------------------------------------------------------------------
-    | Port Range
+    | Image Registry
     |--------------------------------------------------------------------------
-    |
-    | Range of ports available for project containers.
-    |
     */
 
-    'port_range' => [
-        'start' => env('DOCKER_PORT_START', 8000),
-        'end' => env('DOCKER_PORT_END', 8999),
+    'registry' => [
+        'php' => 'php',
+        'nginx' => 'nginx',
+        'apache' => 'httpd',
     ],
 
     /*
     |--------------------------------------------------------------------------
-    | Template Paths
+    | Templates Path
     |--------------------------------------------------------------------------
-    |
-    | Paths to Docker Compose and config templates.
-    |
     */
 
-    'templates' => [
-        'compose' => base_path('docker/templates'),
-        'nginx' => base_path('docker/nginx'),
-        'apache' => base_path('docker/apache'),
-    ],
-
-    /*
-    |--------------------------------------------------------------------------
-    | Auto-restart Policy
-    |--------------------------------------------------------------------------
-    |
-    | Restart policy for project containers.
-    |
-    */
-
-    'restart_policy' => env('DOCKER_RESTART_POLICY', 'unless-stopped'),
-
-    /*
-    |--------------------------------------------------------------------------
-    | Logging Driver
-    |--------------------------------------------------------------------------
-    |
-    | Docker logging driver configuration.
-    |
-    */
-
-    'logging' => [
-        'driver' => env('DOCKER_LOG_DRIVER', 'json-file'),
-        'options' => [
-            'max-size' => env('DOCKER_LOG_MAX_SIZE', '10m'),
-            'max-file' => env('DOCKER_LOG_MAX_FILE', '3'),
-        ],
-    ],
+    'templates_path' => base_path('docker/templates'),
 
 ];

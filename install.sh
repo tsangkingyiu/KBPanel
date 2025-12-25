@@ -1,497 +1,419 @@
 #!/bin/bash
-################################################################################
-# KBPanel Installation Script v1.0.0
+# KBPanel Installer v1.0.0
 # Optimized for Ubuntu 24.04 LTS
-#
-# This script installs a complete KBPanel environment:
-# 1. System dependencies (PHP, Composer, Node, Docker, etc.)
-# 2. Fresh Laravel 12 application
-# 3. KBPanel overlay files from GitHub repository
-# 4. Shared infrastructure (MySQL, Redis, phpMyAdmin containers)
-# 5. Apache web server configuration
-# 6. Security hardening (firewall, permissions)
-#
-# Usage: sudo ./install.sh
-################################################################################
+# Repository: https://github.com/tsangkingyiu/KBPanel
 
 set -euo pipefail
 
-# Script Configuration
-SCRIPT_VERSION="1.0.0"
-LARAVEL_VERSION="12.*"
+# Configuration
 REPO_URL="https://github.com/tsangkingyiu/KBPanel.git"
-REPO_BRANCH="v1.0.0"
+VERSION="v1.0.0"
 INSTALL_DIR="/var/www/kbpanel"
 LOG_FILE="/var/log/kbpanel-install.log"
-TEMP_DIR="/tmp/kbpanel-install-$$"
+LARAVEL_VERSION="12.*"
 
-# Colors for output
-RED='\033[0;31m'
+# Colors
 GREEN='\033[0;32m'
+RED='\033[0;31m'
 YELLOW='\033[1;33m'
-BLUE='\033[0;34m'
 NC='\033[0m' # No Color
 
-################################################################################
-# Utility Functions
-################################################################################
-
+# Logging function
 log() {
-    echo "[$(date +'%Y-%m-%d %H:%M:%S')] $*" | tee -a "$LOG_FILE"
+    echo -e "${GREEN}[$(date +'%Y-%m-%d %H:%M:%S')]${NC} $1" | tee -a "$LOG_FILE"
 }
 
-log_success() {
-    echo -e "${GREEN}✓ $*${NC}" | tee -a "$LOG_FILE"
+error() {
+    echo -e "${RED}[ERROR]${NC} $1" | tee -a "$LOG_FILE"
+    exit 1
 }
 
-log_error() {
-    echo -e "${RED}✗ $*${NC}" | tee -a "$LOG_FILE"
+warn() {
+    echo -e "${YELLOW}[WARNING]${NC} $1" | tee -a "$LOG_FILE"
 }
 
-log_warning() {
-    echo -e "${YELLOW}⚠ $*${NC}" | tee -a "$LOG_FILE"
-}
+# Check if running as root
+if [ "$EUID" -ne 0 ]; then 
+    error "Please run as root (use sudo)"
+fi
 
-log_info() {
-    echo -e "${BLUE}ℹ $*${NC}" | tee -a "$LOG_FILE"
-}
+log "=== KBPanel v1.0.0 Installation Started ==="
 
-check_root() {
-    if [[ $EUID -ne 0 ]]; then
-        log_error "This script must be run as root (use sudo)"
-        exit 1
-    fi
-}
+# Phase 1: Pre-Installation Checks
+log "Phase 1: Pre-Installation Checks"
 
-check_os() {
-    if [[ ! -f /etc/os-release ]]; then
-        log_error "Cannot detect OS version"
-        exit 1
-    fi
-    
-    source /etc/os-release
-    
-    if [[ "$ID" != "ubuntu" ]]; then
-        log_error "This script is designed for Ubuntu. Detected: $ID"
-        exit 1
-    fi
-    
-    if [[ "$VERSION_ID" != "24.04" ]]; then
-        log_warning "This script is optimized for Ubuntu 24.04. Detected: $VERSION_ID"
+# Check OS
+if [ -f /etc/os-release ]; then
+    . /etc/os-release
+    if [ "$ID" != "ubuntu" ]; then
+        warn "This installer is optimized for Ubuntu 24.04. You are running: $ID $VERSION_ID"
         read -p "Continue anyway? (y/N): " -n 1 -r
         echo
         if [[ ! $REPLY =~ ^[Yy]$ ]]; then
             exit 1
         fi
     fi
-}
+fi
 
-check_requirements() {
-    log_info "Checking system requirements..."
-    
-    # Check RAM
-    total_ram=$(free -m | awk '/^Mem:/{print $2}')
-    if [[ $total_ram -lt 3500 ]]; then
-        log_warning "System has ${total_ram}MB RAM. Minimum 4GB recommended."
-    fi
-    
-    # Check Disk Space
-    available_space=$(df -BG / | awk 'NR==2 {print $4}' | sed 's/G//')
-    if [[ $available_space -lt 50 ]]; then
-        log_warning "Available disk space: ${available_space}GB. Minimum 50GB recommended."
-    fi
-    
-    log_success "System requirements check complete"
-}
+# Check RAM
+TOTAL_RAM=$(free -m | awk '/^Mem:/{print $2}')
+if [ "$TOTAL_RAM" -lt 4096 ]; then
+    warn "Minimum 8GB RAM recommended. Detected: ${TOTAL_RAM}MB"
+fi
 
-prompt_config() {
-    log_info "KBPanel Configuration"
-    echo
-    
-    # MySQL Root Password
-    while true; do
-        read -sp "Enter MySQL root password: " DB_ROOT_PASSWORD
-        echo
-        read -sp "Confirm MySQL root password: " DB_ROOT_PASSWORD_CONFIRM
-        echo
-        if [[ "$DB_ROOT_PASSWORD" == "$DB_ROOT_PASSWORD_CONFIRM" ]]; then
-            break
-        else
-            log_error "Passwords do not match. Try again."
-        fi
-    done
-    
-    # Admin Email
-    read -p "Enter admin email: " ADMIN_EMAIL
-    
-    # Admin Password
-    while true; do
-        read -sp "Enter admin password: " ADMIN_PASSWORD
-        echo
-        read -sp "Confirm admin password: " ADMIN_PASSWORD_CONFIRM
-        echo
-        if [[ "$ADMIN_PASSWORD" == "$ADMIN_PASSWORD_CONFIRM" ]]; then
-            break
-        else
-            log_error "Passwords do not match. Try again."
-        fi
-    done
-    
-    # Domain Name
-    SERVER_IP=$(hostname -I | awk '{print $1}')
-    read -p "Enter domain name (or press Enter for IP: $SERVER_IP): " DOMAIN_NAME
-    if [[ -z "$DOMAIN_NAME" ]]; then
-        DOMAIN_NAME="$SERVER_IP"
-    fi
-    
-    # Installation Directory
-    read -p "Installation directory [$INSTALL_DIR]: " CUSTOM_INSTALL_DIR
-    if [[ -n "$CUSTOM_INSTALL_DIR" ]]; then
-        INSTALL_DIR="$CUSTOM_INSTALL_DIR"
-    fi
-    
-    echo
-    log_success "Configuration collected"
-}
+# Check Disk Space
+FREE_SPACE=$(df -BG / | awk 'NR==2 {print $4}' | sed 's/G//')
+if [ "$FREE_SPACE" -lt 50 ]; then
+    warn "Minimum 100GB disk space recommended. Available: ${FREE_SPACE}GB"
+fi
 
-################################################################################
-# Installation Phases
-################################################################################
+# Interactive Configuration
+log "Collecting installation parameters..."
 
-phase_system_update() {
-    log_info "[Phase 1/12] Updating system packages..."
-    apt-get update -y >> "$LOG_FILE" 2>&1
-    DEBIAN_FRONTEND=noninteractive apt-get upgrade -y >> "$LOG_FILE" 2>&1
-    log_success "System updated"
-}
+read -p "Enter MySQL root password: " -s DB_ROOT_PASSWORD
+echo
+read -p "Confirm MySQL root password: " -s DB_ROOT_PASSWORD_CONFIRM
+echo
 
-phase_install_dependencies() {
-    log_info "[Phase 2/12] Installing system dependencies..."
-    apt-get install -y \
-        software-properties-common \
-        apt-transport-https \
-        ca-certificates \
-        curl \
-        wget \
-        git \
-        unzip \
-        zip \
-        gnupg \
-        lsb-release \
-        supervisor \
-        ufw \
-        >> "$LOG_FILE" 2>&1
-    log_success "Dependencies installed"
-}
+if [ "$DB_ROOT_PASSWORD" != "$DB_ROOT_PASSWORD_CONFIRM" ]; then
+    error "Passwords do not match"
+fi
 
-phase_install_php() {
-    log_info "[Phase 3/12] Installing PHP 8.2 and extensions..."
-    add-apt-repository -y ppa:ondrej/php >> "$LOG_FILE" 2>&1
-    apt-get update -y >> "$LOG_FILE" 2>&1
-    apt-get install -y \
-        php8.2-cli \
-        php8.2-fpm \
-        php8.2-mysql \
-        php8.2-xml \
-        php8.2-mbstring \
-        php8.2-curl \
-        php8.2-zip \
-        php8.2-bcmath \
-        php8.2-gd \
-        php8.2-intl \
-        php8.2-redis \
-        php8.2-soap \
-        >> "$LOG_FILE" 2>&1
-    
-    # Configure PHP
-    sed -i 's/upload_max_filesize = .*/upload_max_filesize = 100M/' /etc/php/8.2/fpm/php.ini
-    sed -i 's/post_max_size = .*/post_max_size = 100M/' /etc/php/8.2/fpm/php.ini
-    sed -i 's/memory_limit = .*/memory_limit = 256M/' /etc/php/8.2/fpm/php.ini
-    
-    systemctl enable php8.2-fpm >> "$LOG_FILE" 2>&1
-    systemctl start php8.2-fpm >> "$LOG_FILE" 2>&1
-    
-    log_success "PHP 8.2 installed and configured"
-}
+read -p "Enter KBPanel admin email: " ADMIN_EMAIL
+read -p "Enter KBPanel admin password: " -s ADMIN_PASSWORD
+echo
+read -p "Enter server domain (or press Enter for IP): " SERVER_DOMAIN
 
-phase_install_composer() {
-    log_info "[Phase 4/12] Installing Composer..."
-    curl -sS https://getcomposer.org/installer | php -- --install-dir=/usr/local/bin --filename=composer >> "$LOG_FILE" 2>&1
-    log_success "Composer installed: $(composer --version | head -n1)"
-}
+if [ -z "$SERVER_DOMAIN" ]; then
+    SERVER_DOMAIN=$(curl -s ifconfig.me)
+    log "Using server IP: $SERVER_DOMAIN"
+fi
 
-phase_install_nodejs() {
-    log_info "[Phase 5/12] Installing Node.js and NPM..."
-    curl -fsSL https://deb.nodesource.com/setup_20.x | bash - >> "$LOG_FILE" 2>&1
-    apt-get install -y nodejs >> "$LOG_FILE" 2>&1
-    log_success "Node.js installed: $(node --version), NPM: $(npm --version)"
-}
+# Phase 2: System Update & Dependencies
+log "Phase 2: Installing system dependencies"
 
-phase_install_apache() {
-    log_info "[Phase 6/12] Installing Apache web server..."
-    apt-get install -y apache2 libapache2-mod-php8.2 >> "$LOG_FILE" 2>&1
-    
-    # Enable required modules
-    a2enmod rewrite ssl headers proxy proxy_http >> "$LOG_FILE" 2>&1
-    
-    # Disable default site
-    a2dissite 000-default >> "$LOG_FILE" 2>&1
-    
-    systemctl enable apache2 >> "$LOG_FILE" 2>&1
-    
-    log_success "Apache installed and configured"
-}
+export DEBIAN_FRONTEND=noninteractive
 
-phase_install_docker() {
-    log_info "[Phase 7/12] Installing Docker and Docker Compose..."
-    
-    # Add Docker's official GPG key
-    install -m 0755 -d /etc/apt/keyrings
-    curl -fsSL https://download.docker.com/linux/ubuntu/gpg -o /etc/apt/keyrings/docker.asc
-    chmod a+r /etc/apt/keyrings/docker.asc
-    
-    # Add repository
-    echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.asc] https://download.docker.com/linux/ubuntu \
-    $(. /etc/os-release && echo "$VERSION_CODENAME") stable" | \
-    tee /etc/apt/sources.list.d/docker.list > /dev/null
-    
-    apt-get update -y >> "$LOG_FILE" 2>&1
-    apt-get install -y docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin >> "$LOG_FILE" 2>&1
-    
-    systemctl enable docker >> "$LOG_FILE" 2>&1
-    systemctl start docker >> "$LOG_FILE" 2>&1
-    
-    # Add www-data to docker group
-    usermod -aG docker www-data
-    
-    log_success "Docker installed: $(docker --version)"
-}
+apt-get update -y >> "$LOG_FILE" 2>&1
+log "System updated"
 
-phase_install_laravel() {
-    log_info "[Phase 8/12] Installing Laravel 12..."
-    
-    mkdir -p "$(dirname "$INSTALL_DIR")"
-    cd "$(dirname "$INSTALL_DIR")"
-    
-    # Install fresh Laravel
-    composer create-project --prefer-dist laravel/laravel "$(basename "$INSTALL_DIR")" "$LARAVEL_VERSION" >> "$LOG_FILE" 2>&1
-    
-    cd "$INSTALL_DIR"
-    
-    # Set permissions
-    chown -R www-data:www-data "$INSTALL_DIR"
-    chmod -R 775 storage bootstrap/cache
-    
-    log_success "Laravel installed at $INSTALL_DIR"
-}
+# Install basic tools
+apt-get install -y software-properties-common curl wget git unzip zip ufw supervisor >> "$LOG_FILE" 2>&1
 
-phase_overlay_kbpanel() {
-    log_info "[Phase 9/12] Applying KBPanel overlay from GitHub..."
-    
-    # Clone repository to temp directory
-    git clone --branch "$REPO_BRANCH" "$REPO_URL" "$TEMP_DIR" >> "$LOG_FILE" 2>&1
-    
-    # Copy overlay files
-    cp -r "$TEMP_DIR/app"/* "$INSTALL_DIR/app/" 2>/dev/null || true
-    cp -r "$TEMP_DIR/config"/* "$INSTALL_DIR/config/" 2>/dev/null || true
-    cp -r "$TEMP_DIR/database"/* "$INSTALL_DIR/database/" 2>/dev/null || true
-    cp -r "$TEMP_DIR/resources"/* "$INSTALL_DIR/resources/" 2>/dev/null || true
-    cp -r "$TEMP_DIR/routes"/* "$INSTALL_DIR/routes/" 2>/dev/null || true
-    cp -r "$TEMP_DIR/docker" "$INSTALL_DIR/" 2>/dev/null || true
-    
-    # Install KBPanel dependencies
-    cd "$INSTALL_DIR"
-    composer install --no-interaction >> "$LOG_FILE" 2>&1
-    npm install >> "$LOG_FILE" 2>&1
-    npm run build >> "$LOG_FILE" 2>&1
-    
-    # Generate APP_KEY
-    php artisan key:generate --force >> "$LOG_FILE" 2>&1
-    
-    # Cleanup
-    rm -rf "$TEMP_DIR"
-    
-    log_success "KBPanel overlay applied"
-}
+# Phase 3: Install PHP 8.2
+log "Phase 3: Installing PHP 8.2"
 
-phase_configure_database() {
-    log_info "[Phase 10/12] Configuring database and infrastructure..."
-    
-    # Create .env file
-    cat > "$INSTALL_DIR/.env" <<EOF
-APP_NAME=KBPanel
-APP_ENV=production
-APP_KEY=$(grep APP_KEY "$INSTALL_DIR/.env" | cut -d '=' -f2)
-APP_DEBUG=false
-APP_URL=http://$DOMAIN_NAME
+add-apt-repository ppa:ondrej/php -y >> "$LOG_FILE" 2>&1
+apt-get update -y >> "$LOG_FILE" 2>&1
 
-LOG_CHANNEL=stack
-LOG_LEVEL=info
+apt-get install -y \
+    php8.2-cli \
+    php8.2-fpm \
+    php8.2-mysql \
+    php8.2-xml \
+    php8.2-mbstring \
+    php8.2-curl \
+    php8.2-zip \
+    php8.2-bcmath \
+    php8.2-gd \
+    php8.2-intl \
+    php8.2-redis \
+    >> "$LOG_FILE" 2>&1
 
-DB_CONNECTION=mysql
-DB_HOST=127.0.0.1
-DB_PORT=3306
-DB_DATABASE=kbpanel
-DB_USERNAME=root
-DB_PASSWORD=$DB_ROOT_PASSWORD
+# Configure PHP
+sed -i 's/upload_max_filesize = .*/upload_max_filesize = 128M/' /etc/php/8.2/fpm/php.ini
+sed -i 's/post_max_size = .*/post_max_size = 128M/' /etc/php/8.2/fpm/php.ini
+sed -i 's/memory_limit = .*/memory_limit = 512M/' /etc/php/8.2/fpm/php.ini
 
-CACHE_DRIVER=redis
-QUEUE_CONNECTION=redis
-SESSION_DRIVER=redis
+systemctl enable php8.2-fpm >> "$LOG_FILE" 2>&1
+systemctl start php8.2-fpm >> "$LOG_FILE" 2>&1
 
-REDIS_HOST=127.0.0.1
-REDIS_PASSWORD=null
-REDIS_PORT=6379
+log "PHP 8.2 installed and configured"
 
-KBPANEL_VERSION=1.0.0
-KBPANEL_ADMIN_EMAIL=$ADMIN_EMAIL
-DB_ROOT_PASSWORD=$DB_ROOT_PASSWORD
+# Phase 4: Install Composer
+log "Phase 4: Installing Composer"
+
+curl -sS https://getcomposer.org/installer | php -- --install-dir=/usr/local/bin --filename=composer >> "$LOG_FILE" 2>&1
+log "Composer installed: $(composer --version)"
+
+# Phase 5: Install Node.js
+log "Phase 5: Installing Node.js"
+
+curl -fsSL https://deb.nodesource.com/setup_20.x | bash - >> "$LOG_FILE" 2>&1
+apt-get install -y nodejs >> "$LOG_FILE" 2>&1
+
+log "Node.js installed: $(node --version)"
+log "NPM installed: $(npm --version)"
+
+# Phase 6: Install Apache
+log "Phase 6: Installing Apache"
+
+apt-get install -y apache2 >> "$LOG_FILE" 2>&1
+
+a2enmod rewrite ssl headers proxy proxy_http >> "$LOG_FILE" 2>&1
+a2dissite 000-default >> "$LOG_FILE" 2>&1
+
+systemctl enable apache2 >> "$LOG_FILE" 2>&1
+
+log "Apache installed and configured"
+
+# Phase 7: Install MySQL
+log "Phase 7: Installing MySQL"
+
+apt-get install -y mysql-server >> "$LOG_FILE" 2>&1
+
+# Secure MySQL
+mysql -e "ALTER USER 'root'@'localhost' IDENTIFIED WITH mysql_native_password BY '${DB_ROOT_PASSWORD}';" >> "$LOG_FILE" 2>&1
+mysql -e "DELETE FROM mysql.user WHERE User='';" >> "$LOG_FILE" 2>&1
+mysql -e "DROP DATABASE IF EXISTS test;" >> "$LOG_FILE" 2>&1
+mysql -e "FLUSH PRIVILEGES;" >> "$LOG_FILE" 2>&1
+
+systemctl enable mysql >> "$LOG_FILE" 2>&1
+
+log "MySQL installed and secured"
+
+# Phase 8: Install Docker
+log "Phase 8: Installing Docker"
+
+# Remove old versions
+apt-get remove -y docker docker-engine docker.io containerd runc >> "$LOG_FILE" 2>&1 || true
+
+# Install Docker
+curl -fsSL https://get.docker.com -o get-docker.sh
+sh get-docker.sh >> "$LOG_FILE" 2>&1
+rm get-docker.sh
+
+# Add www-data to docker group
+usermod -aG docker www-data
+
+systemctl enable docker >> "$LOG_FILE" 2>&1
+systemctl start docker >> "$LOG_FILE" 2>&1
+
+log "Docker installed: $(docker --version)"
+
+# Phase 9: Install Redis
+log "Phase 9: Installing Redis"
+
+apt-get install -y redis-server >> "$LOG_FILE" 2>&1
+
+sed -i 's/^bind 127.0.0.1/bind 127.0.0.1/' /etc/redis/redis.conf
+
+systemctl enable redis-server >> "$LOG_FILE" 2>&1
+systemctl start redis-server >> "$LOG_FILE" 2>&1
+
+log "Redis installed"
+
+# Phase 10: Install Certbot
+log "Phase 10: Installing Certbot"
+
+apt-get install -y certbot python3-certbot-apache >> "$LOG_FILE" 2>&1
+
+log "Certbot installed"
+
+# Phase 11: Install Laravel Base
+log "Phase 11: Installing Laravel $LARAVEL_VERSION"
+
+mkdir -p "$(dirname $INSTALL_DIR)"
+cd "$(dirname $INSTALL_DIR)"
+
+log "Creating Laravel project (this may take a few minutes)..."
+su -s /bin/bash -c "composer create-project laravel/laravel $(basename $INSTALL_DIR) '$LARAVEL_VERSION' --prefer-dist --no-interaction" www-data >> "$LOG_FILE" 2>&1
+
+log "Laravel installed"
+
+# Phase 12: Clone KBPanel Overlay
+log "Phase 12: Applying KBPanel overlay"
+
+TMP_DIR="/tmp/kbpanel-overlay-$$"
+git clone --branch "$VERSION" --depth 1 "$REPO_URL" "$TMP_DIR" >> "$LOG_FILE" 2>&1
+
+# Copy overlay files
+cp -r "$TMP_DIR/app"/* "$INSTALL_DIR/app/" 2>/dev/null || true
+cp -r "$TMP_DIR/config"/* "$INSTALL_DIR/config/" 2>/dev/null || true
+cp -r "$TMP_DIR/database"/* "$INSTALL_DIR/database/" 2>/dev/null || true
+cp -r "$TMP_DIR/docker" "$INSTALL_DIR/" 2>/dev/null || true
+cp -r "$TMP_DIR/resources"/* "$INSTALL_DIR/resources/" 2>/dev/null || true
+cp "$TMP_DIR/composer.json" "$INSTALL_DIR/composer.json"
+cp "$TMP_DIR/.env.example" "$INSTALL_DIR/.env.example"
+
+rm -rf "$TMP_DIR"
+
+log "KBPanel overlay applied"
+
+# Phase 13: Install Dependencies
+log "Phase 13: Installing KBPanel dependencies"
+
+cd "$INSTALL_DIR"
+
+su -s /bin/bash -c "composer install --no-interaction --optimize-autoloader" www-data >> "$LOG_FILE" 2>&1
+
+if [ -f package.json ]; then
+    su -s /bin/bash -c "npm install" www-data >> "$LOG_FILE" 2>&1
+    su -s /bin/bash -c "npm run build" www-data >> "$LOG_FILE" 2>&1
+fi
+
+log "Dependencies installed"
+
+# Phase 14: Configure Environment
+log "Phase 14: Configuring environment"
+
+cp .env.example .env
+
+# Update .env
+sed -i "s|APP_NAME=.*|APP_NAME=KBPanel|" .env
+sed -i "s|APP_ENV=.*|APP_ENV=production|" .env
+sed -i "s|APP_DEBUG=.*|APP_DEBUG=false|" .env
+sed -i "s|APP_URL=.*|APP_URL=http://${SERVER_DOMAIN}|" .env
+sed -i "s|DB_DATABASE=.*|DB_DATABASE=kbpanel|" .env
+sed -i "s|DB_PASSWORD=.*|DB_PASSWORD=${DB_ROOT_PASSWORD}|" .env
+
+# Generate app key
+su -s /bin/bash -c "php artisan key:generate --force" www-data >> "$LOG_FILE" 2>&1
+
+log "Environment configured"
+
+# Phase 15: Setup Database
+log "Phase 15: Setting up database"
+
+mysql -u root -p"${DB_ROOT_PASSWORD}" -e "CREATE DATABASE IF NOT EXISTS kbpanel CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;" >> "$LOG_FILE" 2>&1
+
+su -s /bin/bash -c "php artisan migrate --force" www-data >> "$LOG_FILE" 2>&1
+
+log "Database migrated"
+
+# Phase 16: Create Storage Links
+log "Phase 16: Creating storage links"
+
+su -s /bin/bash -c "php artisan storage:link" www-data >> "$LOG_FILE" 2>&1
+
+# Create required directories
+mkdir -p "$INSTALL_DIR/storage/projects" "$INSTALL_DIR/storage/backups" "$INSTALL_DIR/storage/git-repos" "$INSTALL_DIR/storage/ssl"
+chown -R www-data:www-data "$INSTALL_DIR/storage"
+chmod -R 775 "$INSTALL_DIR/storage" "$INSTALL_DIR/bootstrap/cache"
+
+log "Storage configured"
+
+# Phase 17: Start Docker Services
+log "Phase 17: Starting Docker services"
+
+cd "$INSTALL_DIR/docker"
+
+# Create .env for Docker Compose
+cat > .env << EOF
+DB_ROOT_PASSWORD=${DB_ROOT_PASSWORD}
 EOF
 
-    # Start Docker infrastructure
-    cd "$INSTALL_DIR"
-    docker compose -f docker/services.yml up -d >> "$LOG_FILE" 2>&1
-    
-    # Wait for MySQL to be ready
-    log_info "Waiting for MySQL container to be ready..."
-    sleep 10
-    
-    # Create KBPanel database
-    docker exec kbpanel_db mysql -uroot -p"$DB_ROOT_PASSWORD" -e "CREATE DATABASE IF NOT EXISTS kbpanel CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;" >> "$LOG_FILE" 2>&1
-    
-    # Run migrations
-    php artisan migrate --force >> "$LOG_FILE" 2>&1
-    
-    # Create admin user (you'll need to add a seeder or command for this)
-    # php artisan kbpanel:create-admin "$ADMIN_EMAIL" "$ADMIN_PASSWORD" >> "$LOG_FILE" 2>&1
-    
-    log_success "Database configured and migrated"
-}
+docker compose -f services.yml up -d >> "$LOG_FILE" 2>&1
 
-phase_configure_apache() {
-    log_info "[Phase 11/12] Configuring Apache virtual host..."
-    
-    cat > /etc/apache2/sites-available/kbpanel.conf <<EOF
+log "Docker services started"
+
+# Phase 18: Configure Apache
+log "Phase 18: Configuring Apache virtual host"
+
+cat > /etc/apache2/sites-available/kbpanel.conf << EOF
 <VirtualHost *:80>
-    ServerName $DOMAIN_NAME
-    ServerAdmin $ADMIN_EMAIL
-    DocumentRoot $INSTALL_DIR/public
+    ServerName ${SERVER_DOMAIN}
+    ServerAdmin webmaster@${SERVER_DOMAIN}
+    DocumentRoot ${INSTALL_DIR}/public
 
-    <Directory $INSTALL_DIR/public>
-        Options Indexes FollowSymLinks
+    <Directory ${INSTALL_DIR}/public>
+        Options -Indexes +FollowSymLinks
         AllowOverride All
         Require all granted
     </Directory>
 
     ErrorLog \${APACHE_LOG_DIR}/kbpanel-error.log
     CustomLog \${APACHE_LOG_DIR}/kbpanel-access.log combined
-
-    <FilesMatch \.php$>
-        SetHandler "proxy:unix:/run/php/php8.2-fpm.sock|fcgi://localhost"
-    </FilesMatch>
 </VirtualHost>
 EOF
 
-    a2ensite kbpanel >> "$LOG_FILE" 2>&1
-    apache2ctl configtest >> "$LOG_FILE" 2>&1
-    systemctl restart apache2 >> "$LOG_FILE" 2>&1
-    
-    log_success "Apache configured for $DOMAIN_NAME"
-}
+a2ensite kbpanel.conf >> "$LOG_FILE" 2>&1
+apache2ctl configtest >> "$LOG_FILE" 2>&1
+systemctl reload apache2 >> "$LOG_FILE" 2>&1
 
-phase_security_hardening() {
-    log_info "[Phase 12/12] Applying security hardening..."
-    
-    # Configure UFW firewall
-    ufw --force enable >> "$LOG_FILE" 2>&1
-    ufw default deny incoming >> "$LOG_FILE" 2>&1
-    ufw default allow outgoing >> "$LOG_FILE" 2>&1
-    ufw allow ssh >> "$LOG_FILE" 2>&1
-    ufw allow http >> "$LOG_FILE" 2>&1
-    ufw allow https >> "$LOG_FILE" 2>&1
-    
-    # Final permission check
-    chown -R www-data:www-data "$INSTALL_DIR"
-    chmod -R 755 "$INSTALL_DIR"
-    chmod -R 775 "$INSTALL_DIR/storage" "$INSTALL_DIR/bootstrap/cache"
-    
-    log_success "Security hardening complete"
-}
+log "Apache configured"
 
-################################################################################
-# Main Installation
-################################################################################
+# Phase 19: Configure Supervisor
+log "Phase 19: Configuring Supervisor for queues"
 
-main() {
-    clear
-    echo -e "${BLUE}"
-    echo "═══════════════════════════════════════════════════════════"
-    echo "   KBPanel v$SCRIPT_VERSION Installation Script"
-    echo "   Ubuntu 24.04 LTS"
-    echo "═══════════════════════════════════════════════════════════"
-    echo -e "${NC}"
-    echo
-    
-    # Create log file
-    touch "$LOG_FILE"
-    log "KBPanel Installation Started"
-    
-    # Pre-flight checks
-    check_root
-    check_os
-    check_requirements
-    
-    # Collect configuration
-    prompt_config
-    
-    echo
-    log_info "Starting installation process..."
-    echo
-    
-    # Run installation phases
-    phase_system_update
-    phase_install_dependencies
-    phase_install_php
-    phase_install_composer
-    phase_install_nodejs
-    phase_install_apache
-    phase_install_docker
-    phase_install_laravel
-    phase_overlay_kbpanel
-    phase_configure_database
-    phase_configure_apache
-    phase_security_hardening
-    
-    # Installation complete
-    echo
-    echo -e "${GREEN}"
-    echo "═══════════════════════════════════════════════════════════"
-    echo "   KBPanel Installation Complete!"
-    echo "═══════════════════════════════════════════════════════════"
-    echo -e "${NC}"
-    echo
-    log_success "Installation completed successfully"
-    
-    # Display access information
-    echo -e "${BLUE}Access Information:${NC}"
-    echo "  URL: http://$DOMAIN_NAME"
-    echo "  Admin Email: $ADMIN_EMAIL"
-    echo "  Admin Password: [as entered during installation]"
-    echo
-    echo -e "${BLUE}Installation Directory:${NC} $INSTALL_DIR"
-    echo -e "${BLUE}Log File:${NC} $LOG_FILE"
-    echo
-    echo -e "${YELLOW}Next Steps:${NC}"
-    echo "  1. Visit http://$DOMAIN_NAME and log in"
-    echo "  2. Configure DNS records if using a domain"
-    echo "  3. Run 'sudo certbot --apache' to obtain SSL certificate"
-    echo "  4. Review .env file: $INSTALL_DIR/.env"
-    echo "  5. Configure backup schedule"
-    echo
-    echo "For documentation and support:"
-    echo "  GitHub: https://github.com/tsangkingyiu/KBPanel"
-    echo
-}
+cat > /etc/supervisor/conf.d/kbpanel-worker.conf << EOF
+[program:kbpanel-worker]
+process_name=%(program_name)s_%(process_num)02d
+command=php ${INSTALL_DIR}/artisan queue:work redis --sleep=3 --tries=3 --max-time=3600
+autostart=true
+autorestart=true
+stopasgroup=true
+killasgroup=true
+user=www-data
+numprocs=2
+redirect_stderr=true
+stdout_logfile=${INSTALL_DIR}/storage/logs/worker.log
+stopwaitsecs=3600
+EOF
 
-# Run main function
-main "$@"
+supervisorctl reread >> "$LOG_FILE" 2>&1
+supervisorctl update >> "$LOG_FILE" 2>&1
+supervisorctl start kbpanel-worker:* >> "$LOG_FILE" 2>&1
+
+log "Supervisor configured"
+
+# Phase 20: Configure Cron
+log "Phase 20: Setting up cron jobs"
+
+(crontab -u www-data -l 2>/dev/null; echo "* * * * * cd ${INSTALL_DIR} && php artisan schedule:run >> /dev/null 2>&1") | crontab -u www-data -
+
+log "Cron jobs configured"
+
+# Phase 21: Configure Firewall
+log "Phase 21: Configuring firewall"
+
+ufw --force enable >> "$LOG_FILE" 2>&1
+ufw allow 22/tcp >> "$LOG_FILE" 2>&1
+ufw allow 80/tcp >> "$LOG_FILE" 2>&1
+ufw allow 443/tcp >> "$LOG_FILE" 2>&1
+
+log "Firewall configured"
+
+# Phase 22: Final Permissions
+log "Phase 22: Setting final permissions"
+
+chown -R www-data:www-data "$INSTALL_DIR"
+
+log "Permissions set"
+
+# Phase 23: Create Admin User
+log "Phase 23: Creating admin user"
+
+cd "$INSTALL_DIR"
+
+# This would normally use an artisan command, but for v1.0.0 we'll do it directly
+mysql -u root -p"${DB_ROOT_PASSWORD}" kbpanel << EOF >> "$LOG_FILE" 2>&1
+INSERT INTO users (name, email, password, created_at, updated_at) 
+VALUES ('Admin', '${ADMIN_EMAIL}', '$(php -r "echo password_hash('${ADMIN_PASSWORD}', PASSWORD_BCRYPT);")', NOW(), NOW());
+EOF
+
+log "Admin user created"
+
+# Installation Complete
+log "=== Installation Complete ==="
+
+echo ""
+echo -e "${GREEN}╔══════════════════════════════════════════════════════════════╗${NC}"
+echo -e "${GREEN}║          KBPanel v1.0.0 Installation Complete!               ║${NC}"
+echo -e "${GREEN}╚══════════════════════════════════════════════════════════════╝${NC}"
+echo ""
+echo -e "Access KBPanel at: ${GREEN}http://${SERVER_DOMAIN}${NC}"
+echo ""
+echo "Admin Credentials:"
+echo -e "  Email:    ${GREEN}${ADMIN_EMAIL}${NC}"
+echo -e "  Password: ${GREEN}[as provided]${NC}"
+echo ""
+echo "phpMyAdmin (localhost only): http://127.0.0.1:8080"
+echo ""
+echo "Next Steps:"
+echo "  1. Configure DNS to point to this server"
+echo "  2. Run 'sudo certbot --apache' for SSL certificate"
+echo "  3. Review .env file at ${INSTALL_DIR}/.env"
+echo ""
+echo "Installation log: ${LOG_FILE}"
+echo ""
