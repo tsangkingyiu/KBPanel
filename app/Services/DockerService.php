@@ -2,56 +2,144 @@
 
 namespace App\Services;
 
+use Symfony\Component\Process\Process;
+use Symfony\Component\Process\Exception\ProcessFailedException;
+use Illuminate\Support\Facades\Log;
+
 class DockerService
 {
-    public function createContainer($projectId, $config)
+    /**
+     * Check if Docker daemon is running
+     */
+    public function isDockerRunning(): bool
     {
-        // TODO: Implement Docker container creation
-        // Use docker-compose with templates from docker/templates
-        return [
-            'container_id' => 'placeholder_' . $projectId,
-            'port' => 8000 + $projectId,
-            'status' => 'created'
-        ];
+        try {
+            $process = new Process(['docker', 'info']);
+            $process->run();
+            return $process->isSuccessful();
+        } catch (\Exception $e) {
+            Log::error('Docker status check failed: ' . $e->getMessage());
+            return false;
+        }
     }
 
-    public function startContainer($containerId)
+    /**
+     * Create a Docker container for a project
+     */
+    public function createContainer(array $config): array
     {
-        // TODO: Execute docker start command
-        return true;
+        $composePath = $config['compose_path'];
+        $projectName = $config['project_name'];
+
+        try {
+            $process = new Process([
+                'docker', 'compose',
+                '-f', $composePath,
+                '-p', $projectName,
+                'up', '-d'
+            ]);
+            $process->setTimeout(300);
+            $process->run();
+
+            if (!$process->isSuccessful()) {
+                throw new ProcessFailedException($process);
+            }
+
+            return [
+                'success' => true,
+                'output' => $process->getOutput(),
+                'container_id' => $this->getContainerId($projectName)
+            ];
+        } catch (\Exception $e) {
+            Log::error('Container creation failed: ' . $e->getMessage());
+            return [
+                'success' => false,
+                'error' => $e->getMessage()
+            ];
+        }
     }
 
-    public function stopContainer($containerId)
+    /**
+     * Stop and remove a Docker container
+     */
+    public function removeContainer(string $projectName): bool
     {
-        // TODO: Execute docker stop command
-        return true;
+        try {
+            $process = new Process([
+                'docker', 'compose',
+                '-p', $projectName,
+                'down', '-v'
+            ]);
+            $process->run();
+
+            return $process->isSuccessful();
+        } catch (\Exception $e) {
+            Log::error('Container removal failed: ' . $e->getMessage());
+            return false;
+        }
     }
 
-    public function restartContainer($containerId)
+    /**
+     * Get container ID for a project
+     */
+    protected function getContainerId(string $projectName): ?string
     {
-        // TODO: Execute docker restart command
-        return true;
+        try {
+            $process = new Process([
+                'docker', 'ps',
+                '--filter', 'name=' . $projectName,
+                '--format', '{{.ID}}'
+            ]);
+            $process->run();
+
+            return trim($process->getOutput());
+        } catch (\Exception $e) {
+            return null;
+        }
     }
 
-    public function removeContainer($containerId)
+    /**
+     * Get container stats
+     */
+    public function getContainerStats(string $containerId): array
     {
-        // TODO: Execute docker rm command
-        return true;
+        try {
+            $process = new Process([
+                'docker', 'stats',
+                '--no-stream',
+                '--format', '{{json .}}',
+                $containerId
+            ]);
+            $process->run();
+
+            $output = $process->getOutput();
+            return json_decode($output, true) ?? [];
+        } catch (\Exception $e) {
+            Log::error('Failed to get container stats: ' . $e->getMessage());
+            return [];
+        }
     }
 
-    public function getContainerStats($containerId)
+    /**
+     * Execute command in container
+     */
+    public function execInContainer(string $containerId, array $command): array
     {
-        // TODO: Execute docker stats command and parse output
-        return [
-            'cpu_percent' => 0.0,
-            'memory_mb' => 0.0,
-            'disk_mb' => 0.0
-        ];
-    }
+        try {
+            $fullCommand = array_merge(['docker', 'exec', $containerId], $command);
+            $process = new Process($fullCommand);
+            $process->run();
 
-    public function getContainerLogs($containerId, $lines = 100)
-    {
-        // TODO: Execute docker logs command
-        return "Container logs placeholder for {$containerId}";
+            return [
+                'success' => $process->isSuccessful(),
+                'output' => $process->getOutput(),
+                'error' => $process->getErrorOutput()
+            ];
+        } catch (\Exception $e) {
+            return [
+                'success' => false,
+                'error' => $e->getMessage()
+            ];
+        }
     }
 }

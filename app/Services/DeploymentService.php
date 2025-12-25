@@ -4,11 +4,13 @@ namespace App\Services;
 
 use App\Models\Project;
 use App\Models\Deployment;
+use Illuminate\Support\Facades\Storage;
+use Illuminate\Support\Facades\Log;
 
 class DeploymentService
 {
-    protected $dockerService;
-    protected $gitService;
+    protected DockerService $dockerService;
+    protected GitService $gitService;
 
     public function __construct(DockerService $dockerService, GitService $gitService)
     {
@@ -16,52 +18,125 @@ class DeploymentService
         $this->gitService = $gitService;
     }
 
-    public function deployLaravel(Project $project, array $options = [])
+    /**
+     * Deploy a Laravel project
+     */
+    public function deployLaravel(Project $project, array $config): Deployment
     {
         $deployment = Deployment::create([
             'project_id' => $project->id,
+            'type' => 'laravel',
             'status' => 'pending',
-            'branch' => $options['branch'] ?? 'main',
-            'deployed_at' => now(),
+            'config' => $config
         ]);
 
         try {
-            // Pull latest code if Git repo is connected
-            if ($project->git_repository_id) {
-                $this->gitService->pullLatestChanges($project);
+            // Update deployment status
+            $deployment->update(['status' => 'deploying']);
+
+            // Create project directory
+            $projectPath = $this->createProjectDirectory($project);
+
+            // Clone repository if Git URL provided
+            if (!empty($config['git_url'])) {
+                $this->gitService->cloneRepository(
+                    $config['git_url'],
+                    $projectPath,
+                    $config['branch'] ?? 'main'
+                );
             }
 
-            // TODO: Run composer install
-            // TODO: Run npm install && npm run build
-            // TODO: Run migrations if enabled
-            // TODO: Clear cache
-            // TODO: Restart container
+            // Generate Docker Compose file
+            $composePath = $this->generateDockerCompose($project, $config);
+
+            // Start Docker containers
+            $result = $this->dockerService->createContainer([
+                'compose_path' => $composePath,
+                'project_name' => 'kbpanel_' . $project->id
+            ]);
+
+            if (!$result['success']) {
+                throw new \Exception('Failed to create Docker container');
+            }
+
+            // Run Laravel setup commands
+            $this->setupLaravel($result['container_id'], $projectPath);
 
             $deployment->update([
-                'status' => 'success',
-                'deployment_log' => 'Deployment completed successfully'
+                'status' => 'completed',
+                'deployed_at' => now()
             ]);
 
             return $deployment;
         } catch (\Exception $e) {
+            Log::error('Deployment failed: ' . $e->getMessage());
             $deployment->update([
                 'status' => 'failed',
-                'deployment_log' => $e->getMessage()
+                'error_message' => $e->getMessage()
             ]);
-
             throw $e;
         }
     }
 
-    public function deployWordPress(Project $project, array $options = [])
+    /**
+     * Create project directory
+     */
+    protected function createProjectDirectory(Project $project): string
     {
-        // TODO: Implement WordPress deployment logic
-        return null;
+        $basePath = config('kbpanel.storage_path', '/var/www/kbpanel/storage');
+        $projectPath = $basePath . '/projects/' . $project->user_id . '/' . $project->id . '/production';
+
+        if (!file_exists($projectPath)) {
+            mkdir($projectPath, 0755, true);
+        }
+
+        return $projectPath;
     }
 
-    public function rollback(Project $project, $commitHash)
+    /**
+     * Generate Docker Compose configuration
+     */
+    protected function generateDockerCompose(Project $project, array $config): string
     {
-        // TODO: Implement rollback to specific commit
-        return null;
+        $templatePath = base_path('docker/templates/laravel.yml');
+        $template = file_get_contents($templatePath);
+
+        // Replace placeholders
+        $replacements = [
+            '${PHP_VERSION}' => $config['php_version'] ?? '8.2',
+            '${PORT}' => $project->port,
+            '${USER_ID}' => $project->user_id,
+            '${GROUP_ID}' => $project->user_id,
+        ];
+
+        $content = str_replace(array_keys($replacements), array_values($replacements), $template);
+
+        $composePath = $this->createProjectDirectory($project) . '/docker-compose.yml';
+        file_put_contents($composePath, $content);
+
+        return $composePath;
+    }
+
+    /**
+     * Setup Laravel application
+     */
+    protected function setupLaravel(string $containerId, string $projectPath): void
+    {
+        $commands = [
+            ['composer', 'install', '--no-dev', '--optimize-autoloader'],
+            ['php', 'artisan', 'key:generate', '--force'],
+            ['php', 'artisan', 'migrate', '--force'],
+            ['php', 'artisan', 'storage:link'],
+            ['php', 'artisan', 'config:cache'],
+            ['php', 'artisan', 'route:cache'],
+            ['php', 'artisan', 'view:cache'],
+        ];
+
+        foreach ($commands as $command) {
+            $result = $this->dockerService->execInContainer($containerId, $command);
+            if (!$result['success']) {
+                Log::warning('Command failed: ' . implode(' ', $command));
+            }
+        }
     }
 }
