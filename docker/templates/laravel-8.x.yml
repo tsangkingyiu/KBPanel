@@ -1,0 +1,59 @@
+# Laravel 8.x Docker Compose Template
+# Supported PHP Versions: 7.4, 8.0, 8.1
+# KBPanel Auto-Generated Configuration
+
+services:
+  app:
+    image: kbpanel/php:${PHP_VERSION:-8.0}
+    container_name: ${PROJECT_NAME}_app
+    user: "${USER_ID}:${GROUP_ID}"
+    working_dir: /var/www/html
+    volumes:
+      - ${PROJECT_PATH}:/var/www/html
+      - ./php/php.ini:/usr/local/etc/php/conf.d/custom.ini
+    environment:
+      - DB_HOST=kbpanel_db
+      - DB_PORT=3306
+      - DB_DATABASE=${DB_NAME}
+      - DB_USERNAME=${DB_USER}
+      - DB_PASSWORD=${DB_PASSWORD}
+      - REDIS_HOST=kbpanel_redis
+      - REDIS_PORT=6379
+    networks:
+      - kbpanel_net
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "php", "-v"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  web:
+    image: ${WEB_SERVER:-nginx}:alpine
+    container_name: ${PROJECT_NAME}_web
+    ports:
+      - "${HTTP_PORT}:80"
+      - "${HTTPS_PORT}:443"
+    volumes:
+      - ${PROJECT_PATH}:/var/www/html
+      - ${WEB_CONFIG_PATH}:/etc/${WEB_SERVER}/conf.d/default.conf
+      - ${SSL_CERT_PATH}:/etc/ssl/certs/cert.pem
+      - ${SSL_KEY_PATH}:/etc/ssl/private/key.pem
+    depends_on:
+      - app
+    networks:
+      - kbpanel_net
+    restart: unless-stopped
+    labels:
+      - "kbpanel.project=${PROJECT_NAME}"
+      - "kbpanel.laravel_version=8.x"
+      - "kbpanel.php_version=${PHP_VERSION}"
+
+networks:
+  kbpanel_net:
+    external: true
+
+# Volume for persistent storage (optional)
+volumes:
+  app_storage:
+    driver: local

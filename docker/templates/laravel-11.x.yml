@@ -1,0 +1,106 @@
+# Laravel 11.x Docker Compose Template
+# Supported PHP Versions: 8.2, 8.3
+# KBPanel Auto-Generated Configuration
+
+services:
+  app:
+    image: kbpanel/php:${PHP_VERSION:-8.2}
+    container_name: ${PROJECT_NAME}_app
+    user: "${USER_ID}:${GROUP_ID}"
+    working_dir: /var/www/html
+    volumes:
+      - ${PROJECT_PATH}:/var/www/html
+      - ./php/php.ini:/usr/local/etc/php/conf.d/custom.ini
+    environment:
+      - APP_ENV=${APP_ENV:-production}
+      - APP_DEBUG=${APP_DEBUG:-false}
+      - APP_KEY=${APP_KEY}
+      - DB_CONNECTION=mysql
+      - DB_HOST=kbpanel_db
+      - DB_PORT=3306
+      - DB_DATABASE=${DB_NAME}
+      - DB_USERNAME=${DB_USER}
+      - DB_PASSWORD=${DB_PASSWORD}
+      - REDIS_HOST=kbpanel_redis
+      - REDIS_PORT=6379
+      - CACHE_DRIVER=redis
+      - SESSION_DRIVER=redis
+      - QUEUE_CONNECTION=redis
+    networks:
+      - kbpanel_net
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "php", "artisan", "about", "--only=environment"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+    deploy:
+      resources:
+        limits:
+          cpus: '${CPU_LIMIT:-1.0}'
+          memory: ${MEMORY_LIMIT:-512M}
+        reservations:
+          cpus: '0.25'
+          memory: 128M
+
+  web:
+    image: ${WEB_SERVER:-nginx}:alpine
+    container_name: ${PROJECT_NAME}_web
+    ports:
+      - "${HTTP_PORT}:80"
+      - "${HTTPS_PORT}:443"
+    volumes:
+      - ${PROJECT_PATH}:/var/www/html:ro
+      - ${WEB_CONFIG_PATH}:/etc/${WEB_SERVER}/conf.d/default.conf:ro
+      - ${SSL_CERT_PATH}:/etc/ssl/certs/cert.pem:ro
+      - ${SSL_KEY_PATH}:/etc/ssl/private/key.pem:ro
+    depends_on:
+      app:
+        condition: service_healthy
+    networks:
+      - kbpanel_net
+    restart: unless-stopped
+    labels:
+      - "kbpanel.project=${PROJECT_NAME}"
+      - "kbpanel.laravel_version=11.x"
+      - "kbpanel.php_version=${PHP_VERSION}"
+      - "kbpanel.domain=${DOMAIN}"
+      - "kbpanel.ssl_enabled=${SSL_ENABLED:-false}"
+
+  # Scheduler (Laravel Cron)
+  scheduler:
+    image: kbpanel/php:${PHP_VERSION:-8.2}
+    container_name: ${PROJECT_NAME}_scheduler
+    user: "${USER_ID}:${GROUP_ID}"
+    working_dir: /var/www/html
+    command: sh -c "while true; do php artisan schedule:run --verbose --no-interaction; sleep 60; done"
+    volumes:
+      - ${PROJECT_PATH}:/var/www/html
+    environment:
+      - DB_HOST=kbpanel_db
+      - REDIS_HOST=kbpanel_redis
+    networks:
+      - kbpanel_net
+    restart: unless-stopped
+
+  # Queue Worker
+  queue:
+    image: kbpanel/php:${PHP_VERSION:-8.2}
+    container_name: ${PROJECT_NAME}_queue
+    user: "${USER_ID}:${GROUP_ID}"
+    working_dir: /var/www/html
+    command: php artisan queue:work --tries=3 --timeout=90
+    volumes:
+      - ${PROJECT_PATH}:/var/www/html
+    environment:
+      - DB_HOST=kbpanel_db
+      - REDIS_HOST=kbpanel_redis
+      - QUEUE_CONNECTION=redis
+    networks:
+      - kbpanel_net
+    restart: unless-stopped
+
+networks:
+  kbpanel_net:
+    external: true

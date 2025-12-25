@@ -1,0 +1,85 @@
+# Apache Staging Configuration Template for KBPanel
+# Auto-generated for staging environments
+# Variables: ${STAGING_DOMAIN}, ${PROJECT_PATH}
+
+<VirtualHost *:80>
+    ServerName ${STAGING_DOMAIN}
+    
+    DocumentRoot ${PROJECT_PATH}/public
+    
+    # Staging environment notice
+    Header always set X-Environment "Staging"
+    
+    # Security Headers (relaxed for testing)
+    Header always set X-Frame-Options "SAMEORIGIN"
+    Header always set X-Content-Type-Options "nosniff"
+    
+    # Logging (verbose for debugging)
+    ErrorLog ${APACHE_LOG_DIR}/${STAGING_DOMAIN}_error.log
+    CustomLog ${APACHE_LOG_DIR}/${STAGING_DOMAIN}_access.log combined
+    LogLevel debug
+    
+    # Directory Configuration
+    <Directory ${PROJECT_PATH}/public>
+        Options -Indexes +FollowSymLinks
+        AllowOverride All
+        Require all granted
+        
+        # Laravel URL Rewriting
+        <IfModule mod_rewrite.c>
+            RewriteEngine On
+            
+            # Handle Authorization Header
+            RewriteCond %{HTTP:Authorization} .
+            RewriteRule .* - [E=HTTP_AUTHORIZATION:%{HTTP:Authorization}]
+            
+            # Redirect Trailing Slashes
+            RewriteCond %{REQUEST_FILENAME} !-d
+            RewriteRule ^(.*)/$ /$1 [L,R=301]
+            
+            # Send Requests To Front Controller
+            RewriteCond %{REQUEST_FILENAME} !-d
+            RewriteCond %{REQUEST_FILENAME} !-f
+            RewriteRule ^ index.php [L]
+        </IfModule>
+    </Directory>
+    
+    # PHP Configuration
+    <FilesMatch \.php$>
+        SetHandler "proxy:unix:/var/run/php/php${PHP_VERSION}-fpm.sock|fcgi://localhost"
+    </FilesMatch>
+    
+    # Laravel environment variables for staging
+    SetEnv APP_ENV staging
+    SetEnv APP_DEBUG true
+    
+    # Basic Authentication (optional - uncomment to enable)
+    # <Directory ${PROJECT_PATH}/public>
+    #     AuthType Basic
+    #     AuthName "Staging Environment"
+    #     AuthUserFile /etc/apache2/.htpasswd
+    #     Require valid-user
+    # </Directory>
+    
+    # Disable caching for testing
+    <FilesMatch "\.(jpg|jpeg|png|gif|ico|css|js)$">
+        Header set Cache-Control "no-store, no-cache, must-revalidate, proxy-revalidate, max-age=0"
+    </FilesMatch>
+    
+    # Compression
+    <IfModule mod_deflate.c>
+        AddOutputFilterByType DEFLATE text/html text/plain text/xml text/css text/javascript application/javascript application/json
+    </IfModule>
+    
+    # Extended upload limits for testing
+    php_value upload_max_filesize 200M
+    php_value post_max_size 200M
+    php_value max_execution_time 600
+    php_value max_input_time 600
+    php_value memory_limit 512M
+    
+    # Enable error display in staging
+    php_flag display_errors on
+    php_flag display_startup_errors on
+    php_value error_reporting E_ALL
+</VirtualHost>

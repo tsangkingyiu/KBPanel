@@ -1,0 +1,72 @@
+# Laravel 9.x Docker Compose Template
+# Supported PHP Versions: 8.0, 8.1, 8.2
+# KBPanel Auto-Generated Configuration
+
+services:
+  app:
+    image: kbpanel/php:${PHP_VERSION:-8.1}
+    container_name: ${PROJECT_NAME}_app
+    user: "${USER_ID}:${GROUP_ID}"
+    working_dir: /var/www/html
+    volumes:
+      - ${PROJECT_PATH}:/var/www/html
+      - ./php/php.ini:/usr/local/etc/php/conf.d/custom.ini
+    environment:
+      - DB_HOST=kbpanel_db
+      - DB_PORT=3306
+      - DB_DATABASE=${DB_NAME}
+      - DB_USERNAME=${DB_USER}
+      - DB_PASSWORD=${DB_PASSWORD}
+      - REDIS_HOST=kbpanel_redis
+      - REDIS_PORT=6379
+      - CACHE_DRIVER=redis
+      - SESSION_DRIVER=redis
+    networks:
+      - kbpanel_net
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "php", "artisan", "tinker", "--execute=echo 'ok';"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  web:
+    image: ${WEB_SERVER:-nginx}:alpine
+    container_name: ${PROJECT_NAME}_web
+    ports:
+      - "${HTTP_PORT}:80"
+      - "${HTTPS_PORT}:443"
+    volumes:
+      - ${PROJECT_PATH}:/var/www/html
+      - ${WEB_CONFIG_PATH}:/etc/${WEB_SERVER}/conf.d/default.conf
+      - ${SSL_CERT_PATH}:/etc/ssl/certs/cert.pem
+      - ${SSL_KEY_PATH}:/etc/ssl/private/key.pem
+    depends_on:
+      - app
+    networks:
+      - kbpanel_net
+    restart: unless-stopped
+    labels:
+      - "kbpanel.project=${PROJECT_NAME}"
+      - "kbpanel.laravel_version=9.x"
+      - "kbpanel.php_version=${PHP_VERSION}"
+
+  # Queue Worker (Optional - Uncomment if needed)
+  # queue:
+  #   image: kbpanel/php:${PHP_VERSION:-8.1}
+  #   container_name: ${PROJECT_NAME}_queue
+  #   user: "${USER_ID}:${GROUP_ID}"
+  #   working_dir: /var/www/html
+  #   command: php artisan queue:work --tries=3
+  #   volumes:
+  #     - ${PROJECT_PATH}:/var/www/html
+  #   environment:
+  #     - DB_HOST=kbpanel_db
+  #     - REDIS_HOST=kbpanel_redis
+  #   networks:
+  #     - kbpanel_net
+  #   restart: unless-stopped
+
+networks:
+  kbpanel_net:
+    external: true
