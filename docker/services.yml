@@ -1,0 +1,77 @@
+# KBPanel Shared Infrastructure Services
+# This compose file defines the core services shared by all projects:
+# - MySQL database (shared with per-project isolation)
+# - Redis cache/queue
+# - phpMyAdmin for database management
+
+services:
+  # Shared MySQL Database
+  kbpanel_db:
+    image: mysql:8.0
+    container_name: kbpanel_db
+    command: --default-authentication-plugin=mysql_native_password
+    restart: unless-stopped
+    environment:
+      MYSQL_ROOT_PASSWORD: ${DB_ROOT_PASSWORD}
+      MYSQL_DATABASE: kbpanel
+    volumes:
+      - kbpanel_db_data:/var/lib/mysql
+      - ./mysql-init:/docker-entrypoint-initdb.d
+    networks:
+      - kbpanel_net
+    ports:
+      - "127.0.0.1:3306:3306"
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # Shared Redis Cache/Queue
+  kbpanel_redis:
+    image: redis:7-alpine
+    container_name: kbpanel_redis
+    restart: unless-stopped
+    command: redis-server --appendonly yes
+    volumes:
+      - kbpanel_redis_data:/data
+    networks:
+      - kbpanel_net
+    ports:
+      - "127.0.0.1:6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+
+  # phpMyAdmin for Database Management
+  kbpanel_phpmyadmin:
+    image: phpmyadmin/phpmyadmin:latest
+    container_name: kbpanel_phpmyadmin
+    restart: unless-stopped
+    environment:
+      PMA_HOST: kbpanel_db
+      PMA_PORT: 3306
+      PMA_ARBITRARY: 0
+      UPLOAD_LIMIT: 100M
+    depends_on:
+      kbpanel_db:
+        condition: service_healthy
+    networks:
+      - kbpanel_net
+    ports:
+      # Bind to localhost only for security
+      # KBPanel will proxy access through authentication
+      - "127.0.0.1:8080:80"
+
+networks:
+  kbpanel_net:
+    name: kbpanel_net
+    driver: bridge
+
+volumes:
+  kbpanel_db_data:
+    name: kbpanel_db_data
+  kbpanel_redis_data:
+    name: kbpanel_redis_data
