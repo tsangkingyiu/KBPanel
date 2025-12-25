@@ -1,0 +1,27 @@
+# WordPress Docker Compose Template
+# This template is used for deploying WordPress projects
+
+services:
+  wordpress:
+    image: wordpress:latest
+    container_name: ${PROJECT_NAME}_wp
+    restart: unless-stopped
+    ports:
+      - "${PORT}:80"
+    environment:
+      WORDPRESS_DB_HOST: kbpanel_db:3306
+      WORDPRESS_DB_NAME: ${DB_NAME}
+      WORDPRESS_DB_USER: ${DB_USER}
+      WORDPRESS_DB_PASSWORD: ${DB_PASSWORD}
+      WORDPRESS_TABLE_PREFIX: wp_
+      WORDPRESS_CONFIG_EXTRA: |
+        define('WP_REDIS_HOST', 'kbpanel_redis');
+        define('WP_REDIS_PORT', 6379);
+    volumes:
+      - ${PROJECT_PATH}:/var/www/html
+    networks:
+      - kbpanel_net
+
+networks:
+  kbpanel_net:
+    external: true

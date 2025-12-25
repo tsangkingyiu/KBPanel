@@ -1,0 +1,40 @@
+<VirtualHost *:80>
+    ServerName ${DOMAIN}
+    ServerAdmin ${ADMIN_EMAIL}
+    DocumentRoot /var/www/html/public
+
+    <Directory /var/www/html/public>
+        Options -Indexes +FollowSymLinks
+        AllowOverride All
+        Require all granted
+    </Directory>
+
+    # Security headers
+    Header always set X-Frame-Options "SAMEORIGIN"
+    Header always set X-Content-Type-Options "nosniff"
+    Header always set X-XSS-Protection "1; mode=block"
+    Header always set Referrer-Policy "no-referrer-when-downgrade"
+
+    # Hide Apache version
+    ServerSignature Off
+    ServerTokens Prod
+
+    # Log files
+    ErrorLog ${APACHE_LOG_DIR}/${PROJECT_NAME}-error.log
+    CustomLog ${APACHE_LOG_DIR}/${PROJECT_NAME}-access.log combined
+
+    # PHP-FPM Configuration
+    <FilesMatch \.php$>
+        SetHandler "proxy:fcgi://app:9000"
+    </FilesMatch>
+
+    # Disable directory listing
+    <Directory /var/www/html>
+        Options -Indexes
+    </Directory>
+
+    # Protect sensitive files
+    <FilesMatch "(^\..*|composer\.json|composer\.lock|package\.json|\.env)$">
+        Require all denied
+    </FilesMatch>
+</VirtualHost>

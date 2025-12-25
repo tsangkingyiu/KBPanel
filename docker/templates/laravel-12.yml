@@ -1,0 +1,45 @@
+# Laravel 12.x Docker Compose Template
+# This template is used for deploying Laravel 12 projects
+# Variables are replaced by KBPanel during deployment
+
+services:
+  app:
+    image: php:8.2-fpm-alpine
+    container_name: ${PROJECT_NAME}_app
+    restart: unless-stopped
+    working_dir: /var/www/html
+    user: "${USER_ID}:${GROUP_ID}"
+    volumes:
+      - ${PROJECT_PATH}:/var/www/html
+      - ./php.ini:/usr/local/etc/php/conf.d/custom.ini
+    environment:
+      - DB_HOST=kbpanel_db
+      - DB_PORT=3306
+      - DB_DATABASE=${DB_NAME}
+      - DB_USERNAME=${DB_USER}
+      - DB_PASSWORD=${DB_PASSWORD}
+      - REDIS_HOST=kbpanel_redis
+      - REDIS_PORT=6379
+    networks:
+      - kbpanel_net
+    depends_on:
+      - db
+      - redis
+
+  web:
+    image: nginx:alpine
+    container_name: ${PROJECT_NAME}_web
+    restart: unless-stopped
+    ports:
+      - "${PORT}:80"
+    volumes:
+      - ${PROJECT_PATH}:/var/www/html
+      - ./nginx.conf:/etc/nginx/conf.d/default.conf
+    depends_on:
+      - app
+    networks:
+      - kbpanel_net
+
+networks:
+  kbpanel_net:
+    external: true

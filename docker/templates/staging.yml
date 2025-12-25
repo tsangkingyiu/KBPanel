@@ -1,0 +1,41 @@
+# Staging Environment Docker Compose Template
+# Used for creating isolated staging environments
+
+services:
+  app:
+    image: php:${PHP_VERSION}-fpm-alpine
+    container_name: ${PROJECT_NAME}_staging_app
+    restart: unless-stopped
+    working_dir: /var/www/html
+    user: "${USER_ID}:${GROUP_ID}"
+    volumes:
+      - ${STAGING_PATH}:/var/www/html
+      - ./php.ini:/usr/local/etc/php/conf.d/custom.ini
+    environment:
+      - APP_ENV=staging
+      - DB_HOST=kbpanel_db
+      - DB_PORT=3306
+      - DB_DATABASE=${STAGING_DB_NAME}
+      - DB_USERNAME=${STAGING_DB_USER}
+      - DB_PASSWORD=${STAGING_DB_PASSWORD}
+      - REDIS_HOST=kbpanel_redis
+    networks:
+      - kbpanel_net
+
+  web:
+    image: nginx:alpine
+    container_name: ${PROJECT_NAME}_staging_web
+    restart: unless-stopped
+    ports:
+      - "${STAGING_PORT}:80"
+    volumes:
+      - ${STAGING_PATH}:/var/www/html
+      - ./nginx-staging.conf:/etc/nginx/conf.d/default.conf
+    depends_on:
+      - app
+    networks:
+      - kbpanel_net
+
+networks:
+  kbpanel_net:
+    external: true

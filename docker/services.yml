@@ -1,0 +1,81 @@
+# KBPanel Shared Infrastructure Services
+# This Docker Compose file defines the shared services used by all projects:
+# - MySQL 8.0 (shared database)
+# - Redis 7 (cache/queue)
+# - phpMyAdmin (database management)
+
+services:
+  # Shared MySQL Database
+  # All user projects use this MySQL instance with separate databases
+  kbpanel_db:
+    image: mysql:8.0
+    container_name: kbpanel_db
+    command: --default-authentication-plugin=mysql_native_password
+    restart: always
+    environment:
+      MYSQL_ROOT_PASSWORD: ${DB_ROOT_PASSWORD}
+      MYSQL_DATABASE: kbpanel
+    volumes:
+      - db_data:/var/lib/mysql
+      - ./mysql-config:/etc/mysql/conf.d
+    ports:
+      - "127.0.0.1:3306:3306"
+    networks:
+      - kbpanel_net
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost", "-u", "root", "-p$$MYSQL_ROOT_PASSWORD"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # Shared Redis Cache/Queue
+  kbpanel_redis:
+    image: redis:7-alpine
+    container_name: kbpanel_redis
+    restart: always
+    command: redis-server --appendonly yes
+    volumes:
+      - redis_data:/data
+    ports:
+      - "127.0.0.1:6379:6379"
+    networks:
+      - kbpanel_net
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # phpMyAdmin - Database Management Interface
+  # Accessible only via localhost for security
+  kbpanel_pma:
+    image: phpmyadmin/phpmyadmin:latest
+    container_name: kbpanel_pma
+    restart: always
+    environment:
+      PMA_HOST: kbpanel_db
+      PMA_PORT: 3306
+      PMA_ARBITRARY: 0  # Security: Don't allow arbitrary server connections
+      UPLOAD_LIMIT: 100M
+      MEMORY_LIMIT: 256M
+      MAX_EXECUTION_TIME: 300
+    ports:
+      - "127.0.0.1:8080:80"  # Only accessible from localhost
+    depends_on:
+      kbpanel_db:
+        condition: service_healthy
+    networks:
+      - kbpanel_net
+
+networks:
+  kbpanel_net:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 172.20.0.0/16
+
+volumes:
+  db_data:
+    driver: local
+  redis_data:
+    driver: local
