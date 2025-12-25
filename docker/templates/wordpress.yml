@@ -1,0 +1,22 @@
+# WordPress Project Template
+
+services:
+  wordpress:
+    image: wordpress:latest
+    container_name: ${PROJECT_NAME}_wp
+    volumes:
+      - ${PROJECT_PATH}:/var/www/html
+    environment:
+      WORDPRESS_DB_HOST: kbpanel_db
+      WORDPRESS_DB_NAME: ${DB_NAME}
+      WORDPRESS_DB_USER: ${DB_USER}
+      WORDPRESS_DB_PASSWORD: ${DB_PASSWORD}
+    ports:
+      - "${PORT}:80"
+    networks:
+      - kbpanel_net
+    restart: unless-stopped
+
+networks:
+  kbpanel_net:
+    external: true

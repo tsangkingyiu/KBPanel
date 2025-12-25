@@ -1,0 +1,41 @@
+# Laravel 11.x Project Template
+
+services:
+  app:
+    image: php:${PHP_VERSION:-8.2}-fpm
+    container_name: ${PROJECT_NAME}_app
+    working_dir: /var/www/html
+    user: "${USER_ID}:${GROUP_ID}"
+    volumes:
+      - ${PROJECT_PATH}:/var/www/html
+      - ./php.ini:/usr/local/etc/php/conf.d/custom.ini
+    environment:
+      - DB_HOST=kbpanel_db
+      - DB_PORT=3306
+      - DB_DATABASE=${DB_NAME}
+      - DB_USERNAME=${DB_USER}
+      - DB_PASSWORD=${DB_PASSWORD}
+      - REDIS_HOST=kbpanel_redis
+      - REDIS_PORT=6379
+    networks:
+      - kbpanel_net
+    restart: unless-stopped
+
+  web:
+    image: nginx:alpine
+    container_name: ${PROJECT_NAME}_web
+    working_dir: /var/www/html
+    volumes:
+      - ${PROJECT_PATH}:/var/www/html
+      - ./nginx.conf:/etc/nginx/conf.d/default.conf
+    ports:
+      - "${PORT}:80"
+    depends_on:
+      - app
+    networks:
+      - kbpanel_net
+    restart: unless-stopped
+
+networks:
+  kbpanel_net:
+    external: true
