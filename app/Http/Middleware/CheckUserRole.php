@@ -8,10 +8,19 @@ use Symfony\Component\HttpFoundation\Response;
 
 class CheckUserRole
 {
+    /**
+     * Handle an incoming request.
+     *
+     * @param  \Closure(\Illuminate\Http\Request): (\Symfony\Component\HttpFoundation\Response)  $next
+     */
     public function handle(Request $request, Closure $next, string $role): Response
     {
-        if (!$request->user() || $request->user()->role->name !== $role) {
-            abort(403, 'Unauthorized access');
+        if (!auth()->check()) {
+            return redirect()->route('login');
+        }
+
+        if (!auth()->user()->hasRole($role)) {
+            abort(403, 'Unauthorized access. Required role: ' . $role);
         }
 
         return $next($request);
