@@ -2,8 +2,6 @@
 
 namespace App\Services;
 
-use App\Models\Project;
-use App\Models\DatabaseInstance;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Str;
@@ -11,58 +9,66 @@ use Illuminate\Support\Str;
 class DatabaseService
 {
     /**
-     * Create a new database for a project
+     * Create a new database and user for a project on shared MySQL instance
      */
-    public function createDatabase(Project $project): DatabaseInstance
+    public function createProjectDatabase(string $projectName, int $userId): array
     {
-        $dbName = 'kbp_' . $project->id . '_' . Str::random(8);
-        $dbUser = 'user_' . $project->user_id . '_' . Str::random(6);
-        $dbPassword = Str::random(32);
-
+        $dbName = $this->sanitizeDatabaseName($projectName);
+        $dbUser = 'user_' . $userId . '_' . Str::random(6);
+        $dbPassword = Str::random(24);
+        
         try {
-            // Create database
+            // Connect to shared MySQL container
             DB::statement("CREATE DATABASE IF NOT EXISTS `{$dbName}` CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci");
-
-            // Create user with limited privileges
+            
+            // Create user with limited privileges (only to their database)
             DB::statement("CREATE USER IF NOT EXISTS '{$dbUser}'@'%' IDENTIFIED BY '{$dbPassword}'");
             DB::statement("GRANT ALL PRIVILEGES ON `{$dbName}`.* TO '{$dbUser}'@'%'");
             DB::statement("FLUSH PRIVILEGES");
-
-            // Store database instance info
-            $dbInstance = DatabaseInstance::create([
-                'project_id' => $project->id,
-                'db_type' => 'mysql',
+            
+            Log::info('Project database created', [
                 'db_name' => $dbName,
                 'db_user' => $dbUser,
-                'db_password' => encrypt($dbPassword),
-                'db_host' => config('kbpanel.docker.db_host', 'kbpanel_db'),
-                'db_port' => config('kbpanel.docker.db_port', 3306),
+                'user_id' => $userId
             ]);
-
-            Log::info('Database created for project: ' . $project->id);
-
-            return $dbInstance;
+            
+            return [
+                'success' => true,
+                'db_name' => $dbName,
+                'db_user' => $dbUser,
+                'db_password' => $dbPassword,
+                'db_host' => config('kbpanel.docker.db_host'),
+                'db_port' => config('kbpanel.docker.db_port')
+            ];
+            
         } catch (\Exception $e) {
-            Log::error('Failed to create database: ' . $e->getMessage());
-            throw $e;
+            Log::error('Database creation failed', [
+                'error' => $e->getMessage(),
+                'project' => $projectName
+            ]);
+            
+            return [
+                'success' => false,
+                'message' => 'Failed to create database: ' . $e->getMessage()
+            ];
         }
     }
 
     /**
-     * Delete a database
+     * Delete project database and user
      */
-    public function deleteDatabase(DatabaseInstance $dbInstance): bool
+    public function deleteProjectDatabase(string $dbName, string $dbUser): bool
     {
         try {
-            DB::statement("DROP DATABASE IF EXISTS `{$dbInstance->db_name}`");
-            DB::statement("DROP USER IF EXISTS '{$dbInstance->db_user}'@'%'");
+            DB::statement("DROP DATABASE IF EXISTS `{$dbName}`");
+            DB::statement("DROP USER IF EXISTS '{$dbUser}'@'%'");
             DB::statement("FLUSH PRIVILEGES");
-
-            $dbInstance->delete();
-
+            
+            Log::info('Project database deleted', ['db_name' => $dbName]);
             return true;
+            
         } catch (\Exception $e) {
-            Log::error('Failed to delete database: ' . $e->getMessage());
+            Log::error('Database deletion failed', ['error' => $e->getMessage()]);
             return false;
         }
     }
@@ -70,28 +76,41 @@ class DatabaseService
     /**
      * Export database to SQL file
      */
-    public function exportDatabase(DatabaseInstance $dbInstance): string
+    public function exportDatabase(string $dbName, string $exportPath): bool
     {
-        $exportPath = storage_path('app/database-exports/' . $dbInstance->db_name . '_' . now()->format('Y-m-d_His') . '.sql');
-        $password = decrypt($dbInstance->db_password);
-
-        $command = sprintf(
-            'mysqldump -h %s -P %s -u %s -p%s %s > %s',
-            $dbInstance->db_host,
-            $dbInstance->db_port,
-            $dbInstance->db_user,
-            $password,
-            $dbInstance->db_name,
-            $exportPath
-        );
-
-        exec($command, $output, $returnVar);
-
-        if ($returnVar !== 0) {
-            throw new \Exception('Database export failed');
+        $dbHost = config('kbpanel.docker.db_host');
+        $dbUser = env('DB_USERNAME');
+        $dbPassword = env('DB_PASSWORD');
+        
+        $command = "docker exec kbpanel_db mysqldump -h {$dbHost} -u {$dbUser} -p{$dbPassword} {$dbName} > {$exportPath}";
+        
+        try {
+            exec($command, $output, $returnCode);
+            return $returnCode === 0;
+        } catch (\Exception $e) {
+            Log::error('Database export failed', ['error' => $e->getMessage()]);
+            return false;
         }
+    }
 
-        return $exportPath;
+    /**
+     * Import database from SQL file
+     */
+    public function importDatabase(string $dbName, string $importPath): bool
+    {
+        $dbHost = config('kbpanel.docker.db_host');
+        $dbUser = env('DB_USERNAME');
+        $dbPassword = env('DB_PASSWORD');
+        
+        $command = "docker exec -i kbpanel_db mysql -h {$dbHost} -u {$dbUser} -p{$dbPassword} {$dbName} < {$importPath}";
+        
+        try {
+            exec($command, $output, $returnCode);
+            return $returnCode === 0;
+        } catch (\Exception $e) {
+            Log::error('Database import failed', ['error' => $e->getMessage()]);
+            return false;
+        }
     }
 
     /**
@@ -99,30 +118,54 @@ class DatabaseService
      */
     public function getDatabaseSize(string $dbName): float
     {
-        $result = DB::select("
-            SELECT ROUND(SUM(data_length + index_length) / 1024 / 1024, 2) as size_mb
-            FROM information_schema.TABLES
-            WHERE table_schema = ?
-        ", [$dbName]);
-
-        return $result[0]->size_mb ?? 0;
+        try {
+            $result = DB::selectOne("
+                SELECT 
+                    ROUND(SUM(data_length + index_length) / 1024 / 1024, 2) AS size_mb
+                FROM information_schema.TABLES
+                WHERE table_schema = ?
+            ", [$dbName]);
+            
+            return $result->size_mb ?? 0;
+        } catch (\Exception $e) {
+            Log::error('Failed to get database size', ['error' => $e->getMessage()]);
+            return 0;
+        }
     }
 
     /**
-     * Generate phpMyAdmin access URL
+     * Generate phpMyAdmin access URL with token
      */
-    public function launchPhpMyAdmin(Project $project): string
+    public function generatePhpMyAdminUrl(string $dbName, string $dbUser): string
     {
-        // TODO: Implement secure token-based phpMyAdmin access
-        $baseUrl = config('kbpanel.phpmyadmin_url', 'http://localhost:8080');
+        // Generate time-limited token for phpMyAdmin access
         $token = Str::random(32);
+        $expiresAt = now()->addHour();
+        
+        // Store token in cache for validation
+        cache()->put("pma_token_{$token}", [
+            'db_name' => $dbName,
+            'db_user' => $dbUser,
+            'expires_at' => $expiresAt
+        ], $expiresAt);
+        
+        return route('phpmyadmin.proxy', ['token' => $token]);
+    }
 
-        // Store token in cache for 1 hour
-        cache()->put('pma_token_' . $token, [
-            'project_id' => $project->id,
-            'user_id' => $project->user_id
-        ], 3600);
-
-        return $baseUrl . '?token=' . $token;
+    /**
+     * Sanitize database name for MySQL naming rules
+     */
+    private function sanitizeDatabaseName(string $name): string
+    {
+        // Remove special characters, keep only alphanumeric and underscores
+        $sanitized = preg_replace('/[^a-zA-Z0-9_]/', '_', $name);
+        
+        // Ensure it starts with a letter
+        if (!preg_match('/^[a-zA-Z]/', $sanitized)) {
+            $sanitized = 'db_' . $sanitized;
+        }
+        
+        // Limit length to 64 characters (MySQL limit)
+        return substr($sanitized, 0, 64);
     }
 }

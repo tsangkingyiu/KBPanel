@@ -2,144 +2,118 @@
 
 namespace App\Services;
 
-use Symfony\Component\Process\Process;
-use Symfony\Component\Process\Exception\ProcessFailedException;
+use Illuminate\Support\Facades\Process;
 use Illuminate\Support\Facades\Log;
 
 class DockerService
 {
     /**
-     * Check if Docker daemon is running
+     * Create and start a Docker container for a project
      */
-    public function isDockerRunning(): bool
+    public function createProjectContainer(array $config): array
     {
+        $composePath = $config['project_path'] . '/docker-compose.yml';
+        
         try {
-            $process = new Process(['docker', 'info']);
-            $process->run();
-            return $process->isSuccessful();
-        } catch (\Exception $e) {
-            Log::error('Docker status check failed: ' . $e->getMessage());
-            return false;
-        }
-    }
-
-    /**
-     * Create a Docker container for a project
-     */
-    public function createContainer(array $config): array
-    {
-        $composePath = $config['compose_path'];
-        $projectName = $config['project_name'];
-
-        try {
-            $process = new Process([
-                'docker', 'compose',
-                '-f', $composePath,
-                '-p', $projectName,
-                'up', '-d'
-            ]);
-            $process->setTimeout(300);
-            $process->run();
-
-            if (!$process->isSuccessful()) {
-                throw new ProcessFailedException($process);
+            $result = Process::path($config['project_path'])
+                ->run('docker compose up -d');
+            
+            if ($result->successful()) {
+                return [
+                    'success' => true,
+                    'container_id' => $this->getContainerIdByProject($config['project_name']),
+                    'message' => 'Container created successfully'
+                ];
             }
-
-            return [
-                'success' => true,
-                'output' => $process->getOutput(),
-                'container_id' => $this->getContainerId($projectName)
-            ];
+            
+            return ['success' => false, 'message' => $result->errorOutput()];
         } catch (\Exception $e) {
-            Log::error('Container creation failed: ' . $e->getMessage());
-            return [
-                'success' => false,
-                'error' => $e->getMessage()
-            ];
+            Log::error('Docker container creation failed', ['error' => $e->getMessage()]);
+            return ['success' => false, 'message' => $e->getMessage()];
         }
     }
 
     /**
-     * Stop and remove a Docker container
+     * Stop and remove a project container
      */
-    public function removeContainer(string $projectName): bool
+    public function removeProjectContainer(string $projectPath): bool
     {
         try {
-            $process = new Process([
-                'docker', 'compose',
-                '-p', $projectName,
-                'down', '-v'
-            ]);
-            $process->run();
-
-            return $process->isSuccessful();
+            $result = Process::path($projectPath)
+                ->run('docker compose down -v');
+            
+            return $result->successful();
         } catch (\Exception $e) {
-            Log::error('Container removal failed: ' . $e->getMessage());
+            Log::error('Docker container removal failed', ['error' => $e->getMessage()]);
             return false;
         }
     }
 
     /**
-     * Get container ID for a project
+     * Get container resource usage stats
      */
-    protected function getContainerId(string $projectName): ?string
+    public function getContainerStats(string $containerId): array
     {
         try {
-            $process = new Process([
-                'docker', 'ps',
-                '--filter', 'name=' . $projectName,
-                '--format', '{{.ID}}'
-            ]);
-            $process->run();
+            $result = Process::run("docker stats {$containerId} --no-stream --format json");
+            
+            if ($result->successful()) {
+                $stats = json_decode($result->output(), true);
+                return [
+                    'cpu_percent' => floatval(rtrim($stats['CPUPerc'] ?? '0%', '%')),
+                    'memory_usage' => $stats['MemUsage'] ?? 'N/A',
+                    'memory_percent' => floatval(rtrim($stats['MemPerc'] ?? '0%', '%')),
+                    'network_io' => $stats['NetIO'] ?? 'N/A',
+                    'block_io' => $stats['BlockIO'] ?? 'N/A'
+                ];
+            }
+            
+            return [];
+        } catch (\Exception $e) {
+            Log::error('Failed to get container stats', ['error' => $e->getMessage()]);
+            return [];
+        }
+    }
 
-            return trim($process->getOutput());
+    /**
+     * Get container ID by project name
+     */
+    private function getContainerIdByProject(string $projectName): ?string
+    {
+        try {
+            $result = Process::run("docker ps -qf name={$projectName}");
+            return $result->successful() ? trim($result->output()) : null;
         } catch (\Exception $e) {
             return null;
         }
     }
 
     /**
-     * Get container stats
+     * Restart a project container
      */
-    public function getContainerStats(string $containerId): array
+    public function restartContainer(string $projectPath): bool
     {
         try {
-            $process = new Process([
-                'docker', 'stats',
-                '--no-stream',
-                '--format', '{{json .}}',
-                $containerId
-            ]);
-            $process->run();
-
-            $output = $process->getOutput();
-            return json_decode($output, true) ?? [];
+            $result = Process::path($projectPath)
+                ->run('docker compose restart');
+            
+            return $result->successful();
         } catch (\Exception $e) {
-            Log::error('Failed to get container stats: ' . $e->getMessage());
-            return [];
+            Log::error('Container restart failed', ['error' => $e->getMessage()]);
+            return false;
         }
     }
 
     /**
-     * Execute command in container
+     * Check if Docker is available
      */
-    public function execInContainer(string $containerId, array $command): array
+    public function checkDockerAvailability(): bool
     {
         try {
-            $fullCommand = array_merge(['docker', 'exec', $containerId], $command);
-            $process = new Process($fullCommand);
-            $process->run();
-
-            return [
-                'success' => $process->isSuccessful(),
-                'output' => $process->getOutput(),
-                'error' => $process->getErrorOutput()
-            ];
+            $result = Process::run('docker --version');
+            return $result->successful();
         } catch (\Exception $e) {
-            return [
-                'success' => false,
-                'error' => $e->getMessage()
-            ];
+            return false;
         }
     }
 }
